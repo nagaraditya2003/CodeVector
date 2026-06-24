@@ -1,11 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
-import { RefreshCw, Database, Filter } from "lucide-react";
+import {
+  RefreshCw,
+  Database,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+} from "lucide-react";
 import Filters from "../components/Filters";
 import ProductCard from "../components/ProductCard";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
+const PAGE_SIZE = 20;
 
 const CATEGORIES = [
   "All",
@@ -21,54 +30,74 @@ const CATEGORIES = [
 
 export default function Catalog() {
   const [products, setProducts] = useState([]);
-  const [cursor, setCursor] = useState(null);
   const [category, setCategory] = useState("All");
   const [loading, setLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [totalSeen, setTotalSeen] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [goToInput, setGoToInput] = useState("");
 
-  const fetchFirstPage = async (cat) => {
+  const fetchPage = async (page, cat) => {
     setLoading(true);
     try {
-      const params = { limit: 20 };
+      const params = { page, limit: PAGE_SIZE };
       if (cat !== "All") params.category = cat;
-      const res = await axios.get(`${API_BASE}/products`, { params });
+      const res = await axios.get(`${API_BASE}/products/paged`, { params });
       setProducts(res.data.data);
-      setTotalSeen(res.data.data.length);
-      setCursor(res.data.next_cursor);
-      setHasMore(!!res.data.next_cursor);
+      setTotalPages(res.data.total_pages);
+      setTotalCount(res.data.total_count);
+      setCurrentPage(res.data.page);
     } catch (err) {
-      console.error("Error fetching first page:", err);
+      console.error("Error fetching page:", err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    setCursor(null);
-    setProducts([]);
-    setTotalSeen(0);
-    setHasMore(true);
-    fetchFirstPage(category);
+    setCurrentPage(1);
+    fetchPage(1, category);
   }, [category]);
 
-  const loadMore = async () => {
-    if (!cursor || loading) return;
-    setLoading(true);
-    try {
-      const params = { limit: 20, cursor };
-      if (category !== "All") params.category = category;
-      const res = await axios.get(`${API_BASE}/products`, { params });
-      setProducts((prev) => [...prev, ...res.data.data]);
-      setTotalSeen((prev) => prev + res.data.data.length);
-      setCursor(res.data.next_cursor);
-      setHasMore(!!res.data.next_cursor);
-    } catch (err) {
-      console.error("Error loading more products:", err);
-    } finally {
-      setLoading(false);
+  const goToPage = (page) => {
+    if (page < 1 || page > totalPages || page === currentPage || loading) return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    fetchPage(page, category);
+  };
+
+  const handleGoToPage = () => {
+    const page = parseInt(goToInput, 10);
+    if (!isNaN(page) && page >= 1 && page <= totalPages) {
+      goToPage(page);
+      setGoToInput("");
     }
   };
+
+  // Build the array of page numbers to display
+  const pageNumbers = useMemo(() => {
+    const pages = [];
+    const maxVisible = 7;
+
+    if (totalPages <= maxVisible + 2) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+
+      const leftBound = Math.max(2, currentPage - 2);
+      const rightBound = Math.min(totalPages - 1, currentPage + 2);
+
+      if (leftBound > 2) pages.push("...");
+      for (let i = leftBound; i <= rightBound; i++) pages.push(i);
+      if (rightBound < totalPages - 1) pages.push("...");
+
+      pages.push(totalPages);
+    }
+
+    return pages;
+  }, [currentPage, totalPages]);
+
+  const startItem = (currentPage - 1) * PAGE_SIZE + 1;
+  const endItem = Math.min(currentPage * PAGE_SIZE, totalCount);
 
   return (
     <div style={s.page} className="container">
@@ -83,11 +112,8 @@ export default function Catalog() {
         </div>
         <button
           onClick={() => {
-            setCursor(null);
-            setProducts([]);
-            setTotalSeen(0);
-            setHasMore(true);
-            fetchFirstPage(category);
+            setCurrentPage(1);
+            fetchPage(1, category);
           }}
           style={s.refreshBtn}
           title="Reset and refresh"
@@ -114,7 +140,8 @@ export default function Catalog() {
         <div style={s.statsText}>
           <Database size={14} style={{ color: "var(--accent-primary)" }} />
           <span>
-            Showing <strong>{totalSeen.toLocaleString()}</strong> products
+            Showing <strong>{startItem.toLocaleString()}</strong>–<strong>{endItem.toLocaleString()}</strong> of{" "}
+            <strong>{totalCount.toLocaleString()}</strong> products
             {category !== "All" && (
               <>
                 {" "}
@@ -123,25 +150,28 @@ export default function Catalog() {
             )}
           </span>
         </div>
-        {!hasMore && totalSeen > 0 && (
-          <span style={s.endBadge}>All products loaded</span>
-        )}
+        <span style={s.pageBadge}>
+          Page {currentPage} of {totalPages.toLocaleString()}
+        </span>
       </div>
 
       {/* Products Grid */}
-      <div style={s.grid}>
-        {products.map((product, index) => (
-          <ProductCard
-            key={product.id}
-            product={product}
-            index={index}
-          />
-        ))}
-
-        {/* Loading skeletons */}
-        {loading &&
-          Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)}
-      </div>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={`${category}-${currentPage}`}
+          style={s.grid}
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -12 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+        >
+          {loading
+            ? Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)
+            : products.map((product, index) => (
+                <ProductCard key={product.id} product={product} index={index} />
+              ))}
+        </motion.div>
+      </AnimatePresence>
 
       {/* Empty State */}
       {!loading && products.length === 0 && (
@@ -150,17 +180,118 @@ export default function Catalog() {
         </div>
       )}
 
-      {/* Load More Button */}
-      {hasMore && !loading && products.length > 0 && (
-        <div style={s.loadMoreRow}>
-          <motion.button
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            style={s.loadMoreBtn}
-            onClick={loadMore}
-          >
-            Load 20 More Products
-          </motion.button>
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div style={s.paginationWrapper}>
+          <div style={s.paginationBar}>
+            {/* First */}
+            <button
+              onClick={() => goToPage(1)}
+              disabled={currentPage === 1 || loading}
+              style={{
+                ...s.pageBtn,
+                ...s.navBtn,
+                ...(currentPage === 1 ? s.pageBtnDisabled : {}),
+              }}
+              title="First page"
+            >
+              <ChevronsLeft size={16} />
+            </button>
+
+            {/* Prev */}
+            <button
+              onClick={() => goToPage(currentPage - 1)}
+              disabled={currentPage === 1 || loading}
+              style={{
+                ...s.pageBtn,
+                ...s.navBtn,
+                ...(currentPage === 1 ? s.pageBtnDisabled : {}),
+              }}
+              title="Previous page"
+            >
+              <ChevronLeft size={16} />
+            </button>
+
+            {/* Page Numbers */}
+            <div style={s.pageNumbers}>
+              {pageNumbers.map((p, i) =>
+                p === "..." ? (
+                  <span key={`ellipsis-${i}`} style={s.ellipsis}>
+                    •••
+                  </span>
+                ) : (
+                  <motion.button
+                    key={p}
+                    onClick={() => goToPage(p)}
+                    disabled={loading}
+                    whileHover={p !== currentPage ? { scale: 1.08 } : {}}
+                    whileTap={p !== currentPage ? { scale: 0.94 } : {}}
+                    style={{
+                      ...s.pageBtn,
+                      ...(p === currentPage ? s.pageBtnActive : {}),
+                    }}
+                  >
+                    {p}
+                  </motion.button>
+                )
+              )}
+            </div>
+
+            {/* Next */}
+            <button
+              onClick={() => goToPage(currentPage + 1)}
+              disabled={currentPage === totalPages || loading}
+              style={{
+                ...s.pageBtn,
+                ...s.navBtn,
+                ...(currentPage === totalPages ? s.pageBtnDisabled : {}),
+              }}
+              title="Next page"
+            >
+              <ChevronRight size={16} />
+            </button>
+
+            {/* Last */}
+            <button
+              onClick={() => goToPage(totalPages)}
+              disabled={currentPage === totalPages || loading}
+              style={{
+                ...s.pageBtn,
+                ...s.navBtn,
+                ...(currentPage === totalPages ? s.pageBtnDisabled : {}),
+              }}
+              title="Last page"
+            >
+              <ChevronsRight size={16} />
+            </button>
+          </div>
+
+          {/* Go to Page */}
+          <div style={s.goToRow}>
+            <span style={s.goToLabel}>Go to</span>
+            <input
+              type="number"
+              min={1}
+              max={totalPages}
+              value={goToInput}
+              onChange={(e) => setGoToInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleGoToPage()}
+              placeholder={`1–${totalPages}`}
+              style={s.goToInput}
+            />
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={handleGoToPage}
+              disabled={loading || !goToInput}
+              style={{
+                ...s.goToBtn,
+                ...(loading || !goToInput ? { opacity: 0.4, pointerEvents: "none" } : {}),
+              }}
+            >
+              Go
+            </motion.button>
+          </div>
         </div>
       )}
     </div>
@@ -280,12 +411,12 @@ const s = {
     fontSize: "13px",
     color: "var(--text-secondary)",
   },
-  endBadge: {
+  pageBadge: {
     fontSize: "11px",
     fontWeight: "700",
-    color: "var(--success)",
-    backgroundColor: "var(--success-bg)",
-    border: "1px solid var(--success-border)",
+    color: "var(--accent-primary)",
+    backgroundColor: "var(--accent-glow)",
+    border: "1px solid rgba(99, 102, 241, 0.3)",
     padding: "4px 12px",
     borderRadius: "20px",
   },
@@ -295,28 +426,127 @@ const s = {
     gap: "20px",
     width: "100%",
   },
-  loadMoreRow: {
-    display: "flex",
-    justifyContent: "center",
-    margin: "40px 0 20px",
-  },
-  loadMoreBtn: {
-    padding: "14px 36px",
-    fontSize: "14px",
-    fontWeight: "700",
-    backgroundColor: "#fff",
-    color: "var(--bg-primary)",
-    border: "none",
-    borderRadius: "28px",
-    cursor: "pointer",
-    boxShadow: "0 4px 12px rgba(255, 255, 255, 0.1)",
-  },
   emptyState: {
     textAlign: "center",
     padding: "60px 0",
     color: "var(--text-secondary)",
     fontSize: "14px",
   },
+
+  /* ── Pagination Styles ── */
+  paginationWrapper: {
+    display: "flex",
+    justifyContent: "center",
+    margin: "40px 0 20px",
+  },
+  paginationBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "8px 12px",
+    backgroundColor: "var(--bg-secondary)",
+    border: "1px solid var(--border-color)",
+    borderRadius: "16px",
+  },
+  pageNumbers: {
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+  },
+  pageBtn: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "36px",
+    height: "36px",
+    padding: "0 10px",
+    borderRadius: "10px",
+    border: "1px solid transparent",
+    backgroundColor: "transparent",
+    color: "var(--text-secondary)",
+    fontSize: "13px",
+    fontWeight: "600",
+    fontFamily: "var(--font-sans)",
+    cursor: "pointer",
+    transition: "all 0.2s ease",
+    userSelect: "none",
+  },
+  pageBtnActive: {
+    background: "var(--accent-gradient)",
+    color: "#fff",
+    fontWeight: "700",
+    border: "1px solid transparent",
+    boxShadow: "0 2px 10px rgba(99, 102, 241, 0.35)",
+    cursor: "default",
+  },
+  pageBtnDisabled: {
+    opacity: 0.3,
+    cursor: "not-allowed",
+    pointerEvents: "none",
+  },
+  navBtn: {
+    color: "var(--text-muted)",
+  },
+  ellipsis: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "32px",
+    height: "36px",
+    color: "var(--text-muted)",
+    fontSize: "12px",
+    letterSpacing: "2px",
+    userSelect: "none",
+  },
+
+  /* ── Go to Page ── */
+  goToRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "12px",
+    justifyContent: "center",
+  },
+  goToLabel: {
+    fontSize: "12px",
+    fontWeight: "600",
+    color: "var(--text-muted)",
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+  },
+  goToInput: {
+    width: "90px",
+    height: "34px",
+    padding: "0 10px",
+    borderRadius: "10px",
+    border: "1px solid var(--border-color)",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    color: "#fff",
+    fontSize: "13px",
+    fontWeight: "600",
+    fontFamily: "var(--font-sans)",
+    outline: "none",
+    textAlign: "center",
+    transition: "border-color 0.2s",
+    MozAppearance: "textfield",
+  },
+  goToBtn: {
+    height: "34px",
+    padding: "0 18px",
+    borderRadius: "10px",
+    border: "none",
+    background: "var(--accent-gradient)",
+    color: "#fff",
+    fontSize: "12px",
+    fontWeight: "700",
+    fontFamily: "var(--font-sans)",
+    cursor: "pointer",
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    boxShadow: "0 2px 8px rgba(99, 102, 241, 0.3)",
+  },
+
+  /* ── Skeleton ── */
   skeleton: {
     backgroundColor: "var(--bg-card)",
     borderRadius: "14px",

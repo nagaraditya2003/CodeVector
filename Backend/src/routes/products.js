@@ -126,6 +126,64 @@ router.get("/", async (req, res) => {
   }
 });
 
+// --- GET /api/products/paged ---
+// Offset-based page-number pagination for the catalog UI
+const pagedQuerySchema = z.object({
+  page: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : 1))
+    .pipe(z.number().min(1)),
+  limit: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : 20))
+    .pipe(z.number().min(1).max(100)),
+  category: z.string().optional(),
+});
+
+router.get("/paged", async (req, res) => {
+  const parsed = pagedQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const { page, limit, category } = parsed.data;
+  const offset = (page - 1) * limit;
+
+  try {
+    // Get total count for pagination metadata
+    const countResult = await pool.query(
+      `SELECT COUNT(*) AS total FROM products
+       WHERE ($1::text IS NULL OR category = $1)`,
+      [category ?? null]
+    );
+    const total_count = parseInt(countResult.rows[0].total, 10);
+    const total_pages = Math.ceil(total_count / limit);
+
+    // Fetch the page of data
+    const result = await pool.query(
+      `SELECT id, name, category, price, created_at, updated_at
+       FROM products
+       WHERE ($1::text IS NULL OR category = $1)
+       ORDER BY created_at DESC, id DESC
+       LIMIT $2 OFFSET $3`,
+      [category ?? null, limit, offset]
+    );
+
+    return res.json({
+      data: result.rows,
+      page,
+      limit,
+      total_count,
+      total_pages,
+    });
+  } catch (err) {
+    console.error("Error in GET /products/paged:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // --- GET /api/products/benchmark ---
 // Compares offset vs keyset speed at depth 50,000
 // This is your proof that keyset is faster
